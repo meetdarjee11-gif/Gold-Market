@@ -1,197 +1,59 @@
+# app.py
 import streamlit as st
-import pandas as pd
 import yfinance as yf
-from pmdarima import auto_arima
-import matplotlib.pyplot as plt
-from datetime import timedelta
-import numpy as np
+import pandas as pd
+from datetime import date, timedelta
 
 # --- Configuration ---
-TICKER_SYMBOL = 'BTC-USD'
-FORECAST_DAYS = 14
-DATA_PERIOD_HISTORY = '3y' # For model training (3 years of daily data)
-DATA_PERIOD_LIVE = '1d'    # For fetching the most recent data
-DATA_INTERVAL_LIVE = '1m'  # For fetching minute-level data
+# Using GLD (SPDR Gold Shares ETF) as a proxy for gold prices
+TICKER = 'GLD' 
 
-# --- Data Fetching and Model ---
+st.set_page_config(page_title="Gold Market Data App", layout="wide")
 
-@st.cache_data(ttl=60*60*4) # Cache for 4 hours
-def load_historical_data(ticker):
-    """Fetches long-term historical data for model training."""
-    st.info(f"Fetching {DATA_PERIOD_HISTORY} of daily data for model training...")
+st.title("💰 Gold Market Price Tracker")
+st.markdown(f"Fetching data for **{TICKER}** using `yfinance`.")
+
+@st.cache_data
+def get_historical_data(ticker_symbol, days=365):
+    """Fetches historical stock data from yfinance and caches the result."""
+    end_date = date.today()
+    start_date = end_date - timedelta(days=days)
+
     try:
-        # Fetch long-term daily data for stable ARIMA training
-        data = yf.download(ticker, period=DATA_PERIOD_HISTORY)
-        df = data[['Close']].copy()
-        df.dropna(inplace=True) 
-        return df
+        # Download data for the specified time range
+        data = yf.download(ticker_symbol, start=start_date, end=end_date)
+        return data
     except Exception as e:
-        st.error(f"Error fetching historical data: {e}")
+        st.error(f"Error fetching data for {ticker_symbol}: {e}")
         return pd.DataFrame()
 
-@st.cache_data(ttl=60) # Cache for 1 minute to simulate "live" refresh
-def get_most_recent_price(ticker):
-    """Fetches the most recent available price point (near-live)."""
-    try:
-        # Using Ticker.history for the most granular interval
-        ticker_obj = yf.Ticker(ticker)
-        # Fetch 1-minute data for the last 24 hours (1 day)
-        recent_data = ticker_obj.history(period=DATA_PERIOD_LIVE, interval=DATA_INTERVAL_LIVE)
-        
-        if not recent_data.empty:
-            # Get the very last closing price
-            latest_price = recent_data['Close'].iloc[-1]
-            latest_time = recent_data.index[-1]
-            return latest_price, latest_time
-        return None, None
-    except Exception as e:
-        st.warning(f"Could not retrieve most recent price: {e}")
-        return None, None
+# Fetch data for the last 1 year
+df = get_historical_data(TICKER, days=365)
 
-@st.cache_resource(ttl=60*60*12) # Cache model training for 12 hours
-def train_and_forecast(df, n_periods):
-    """Trains the ARIMA model and generates a forecast."""
-    if df.empty:
-        return pd.DataFrame(), None
+if not df.empty:
+    st.subheader(f"Price Chart for {TICKER}")
+    # Display the Closing price over time
+    st.line_chart(df['Close'])
 
-    with st.spinner('Training ARIMA model...'):
-        try:
-            # Auto_arima finds the best (p, d, q) parameters
-            model = auto_arima(df['Close'], seasonal=False, stepwise=True,
-                               suppress_warnings=True, error_action='ignore')
-            
-            # Forecast the next N periods
-            forecast_values, conf_int = model.predict(n_periods=n_periods, return_conf_int=True, alpha=0.05)
-            
-            # Create forecast index (assuming daily forecast)
-            last_date = df.index[-1]
-            forecast_dates = pd.date_range(start=last_date + timedelta(days=1), 
-                                           periods=n_periods, freq='D')
+    st.subheader("Latest Price and Summary")
 
-            # Create the forecast DataFrame
-            forecast_df = pd.DataFrame({
-                'Predicted Price': forecast_values,
-                'Lower Bound (95%)': conf_int[:, 0],
-                'Upper Bound (95%)': conf_int[:, 1]
-            }, index=forecast_dates)
-            
-            return forecast_df, model
+    latest_close = df['Close'].iloc[-1]
+    previous_close = df['Close'].iloc[-2]
 
-        except Exception as e:
-            st.error(f"Error during model training/forecasting: {e}")
-            return pd.DataFrame(), None
+    # Calculate change
+    price_change = latest_close - previous_close
+    percent_change = (price_change / previous_close) * 100
 
-# --- Streamlit App Layout ---
-def main():
-    st.set_page_config(page_title="₿ BTC 14-Day Price Predictor", layout="wide")
-    st.title("₿ Bitcoin Price Prediction Project")
-    st.markdown(f"Forecasting the next **{FORECAST_DAYS} days** of **{TICKER_SYMBOL}** using an **ARIMA** model.")
+    col1, col2, col3 = st.columns(3)
 
-    # 1. Fetch and Display Most Recent Price
-    latest_price, latest_time = get_most_recent_price(TICKER_SYMBOL)
-    
-    col1, col2 = st.columns([1, 2])
-    
     with col1:
-        st.header("Current Price (Near-Live)")
-        if latest_price is not None:
-            st.metric(label=f"{TICKER_SYMBOL} Price", 
-                      value=f"${latest_price:,.2f}", 
-                      delta=f"As of {latest_time.strftime('%Y-%m-%d %H:%M %Z')}")
-        else:
-            st.warning("Could not fetch a recent price.")
-            
-    # 2. Load Historical Data and Train Model
-    historical_df = load_historical_data(TICKER_SYMBOL)
-    
-    if historical_df.empty:
-        st.error("Cannot proceed without historical data.")
-        st.stop()
-        
+        st.metric("Latest Close Price", f"${latest_close:.2f}")
     with col2:
-        st.success(f"Historical data loaded successfully! ({DATA_PERIOD_HISTORY} of data, ending {historical_df.index[-1].strftime('%Y-%m-%d')})")
-        st.caption("Model is trained on daily data. The forecast is **daily** for 14 days.")
+        st.metric("Price Change (vs previous day)", f"${price_change:.2f}", f"{percent_change:.2f}%")
+    with col3:
+        st.metric("Data Period", f"{df.index.min().strftime('%Y-%m-%d')} to {df.index.max().strftime('%Y-%m-%d')}")
 
-
-    # 3. Train Model and Forecast
-    forecast_df, model = train_and_forecast(historical_df, FORECAST_DAYS)
-
-    if forecast_df.empty:
-        st.stop()
-        
-    st.markdown("---")
-
-    # 4. Display Results
-
-    ## Predicted Values Table
-    st.header(f"🔮 {FORECAST_DAYS}-Day Predicted Prices")
-    st.dataframe(
-        forecast_df.style.format('${:,.2f}'), 
-        use_container_width=True
-    )
-    st.caption("Forecast includes 95% confidence interval bounds. Prediction starts one day after the last historical close.")
-
-    ## Combined Plot
-    st.header("📈 Historical Data vs. 14-Day Forecast")
-
-    # Prepare data for plotting
-    plot_df = historical_df.copy()
-    
-    # Create a full DataFrame combining historical and forecast data
-    # Create columns for the forecast in the historical data, filled with NaN
-    forecast_cols = ['Predicted Price', 'Lower Bound (95%)', 'Upper Bound (95%)']
-    for col in forecast_cols:
-        plot_df[col] = np.nan
-
-    # Append the forecast data for a continuous plot
-    full_plot_df = pd.concat([plot_df, forecast_df[forecast_cols]], axis=0)
-    
-    # Plotting using Matplotlib
-    fig, ax = plt.subplots(figsize=(14, 6))
-    
-    # Plot historical closing prices
-    ax.plot(historical_df.index, historical_df['Close'], label='Historical Closing Price', color='blue', linewidth=1.5)
-    
-    # Plot the forecasted prices
-    ax.plot(forecast_df.index, forecast_df['Predicted Price'], label='Predicted Price', color='red', linestyle='--', linewidth=2)
-    
-    # Plot confidence interval (shaded region)
-    ax.fill_between(forecast_df.index, 
-                    forecast_df['Lower Bound (95%)'], 
-                    forecast_df['Upper Bound (95%)'], 
-                    color='pink', alpha=0.5, label='95% Confidence Interval')
-
-    ax.set_title(f'{TICKER_SYMBOL} Price Forecast', fontsize=18)
-    ax.set_xlabel('Date', fontsize=14)
-    ax.set_ylabel('Price (USD)', fontsize=14)
-    ax.legend()
-    ax.grid(True, linestyle=':', alpha=0.6)
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    
-    st.pyplot(fig)
-    
-    st.markdown("---")
-
-    # 5. Deployment Info
-    st.sidebar.header("Deployment Checklist")
-    st.sidebar.markdown(
-        """
-        1. **Save** this code as `app.py`.
-        2. Create a file named **`requirements.txt`** with the content below.
-        3. Push both files to a **public GitHub repository**.
-        4. Connect the repository to **Streamlit Community Cloud** and deploy.
-        """
-    )
-    st.sidebar.subheader("`requirements.txt` Content")
-    st.sidebar.code("""
-streamlit
-pandas
-yfinance
-pmdarima
-matplotlib
-numpy
-""")
-    
-if __name__ == '__main__':
-    main()
+    st.subheader("Raw Data Table (Last 10 Days)")
+    st.dataframe(df.tail(10)) # Show last 10 rows
+else:
+    st.warning("Could not load financial data. Check the ticker symbol or your internet connection.")
