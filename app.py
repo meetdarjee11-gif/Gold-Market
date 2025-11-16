@@ -21,7 +21,8 @@ def get_historical_data(ticker_symbol, days=365):
 
     try:
         # Download data for the specified time range
-        data = yf.download(ticker_symbol, start=start_date, end=end_date)
+        # auto_adjust=True uses adjusted closing prices
+        data = yf.download(ticker_symbol, start=start_date, end=end_date, auto_adjust=True)
         return data
     except Exception as e:
         st.error(f"Error fetching data for {ticker_symbol}: {e}")
@@ -37,23 +38,33 @@ if not df.empty:
 
     st.subheader("Latest Price and Summary")
 
-    latest_close = df['Close'].iloc[-1]
-    previous_close = df['Close'].iloc[-2]
+    # --- FIX IMPLEMENTATION FOR TYPEERROR ---
+    # Filter the 'Close' column to ensure only valid, non-NaN prices are used
+    valid_closes = df['Close'].dropna()
 
-    # Calculate change
-    price_change = latest_close - previous_close
-    percent_change = (price_change / previous_close) * 100
+    if len(valid_closes) >= 2:
+        # Get the latest and previous valid closing price
+        latest_close = valid_closes.iloc[-1]
+        previous_close = valid_closes.iloc[-2]
+        
+        # Calculate change
+        price_change = latest_close - previous_close
+        percent_change = (price_change / previous_close) * 100
 
-    col1, col2, col3 = st.columns(3)
+        col1, col2, col3 = st.columns(3)
 
-    with col1:
-        st.metric("Latest Close Price", f"${latest_close:.2f}")
-    with col2:
-        st.metric("Price Change (vs previous day)", f"${price_change:.2f}", f"{percent_change:.2f}%")
-    with col3:
-        st.metric("Data Period", f"{df.index.min().strftime('%Y-%m-%d')} to {df.index.max().strftime('%Y-%m-%d')}")
+        with col1:
+            # This line is now safe as latest_close is guaranteed to be a number
+            st.metric("Latest Close Price", f"${latest_close:.2f}")
+        with col2:
+            st.metric("Price Change (vs previous day)", f"${price_change:.2f}", f"{percent_change:.2f}%")
+        with col3:
+            st.metric("Data Period", f"{df.index.min().strftime('%Y-%m-%d')} to {df.index.max().strftime('%Y-%m-%d')}")
 
-    st.subheader("Raw Data Table (Last 10 Days)")
-    st.dataframe(df.tail(10)) # Show last 10 rows
+        st.subheader("Raw Data Table (Last 10 Days)")
+        st.dataframe(df.tail(10)) # Show last 10 rows
+    else:
+        st.warning("Not enough valid closing price data available to calculate metrics.")
+        st.dataframe(df)
 else:
-    st.warning("Could not load financial data. Check the ticker symbol or your internet connection.")
+    st.warning("Could not load financial data. Check the ticker symbol or connection.")
